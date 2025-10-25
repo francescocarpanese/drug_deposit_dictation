@@ -59,21 +59,31 @@ def process(json_file: str, output_dir: str, model: str):
               help='Database path')
 @click.option('--review/--no-review', default=True,
               help='Review data before importing')
-def import_data(csv_file: str, db: str, review: bool):
+@click.option('--auto-create/--no-auto-create', default=True,
+              help='Automatically create new drugs when no match found')
+def import_data(csv_file: str, db: str, review: bool, auto_create: bool):
     """Import CSV data into the database."""
     click.echo(f"Importing: {csv_file}")
     
     importer = DataImporter(db_path=db)
     
     if review:
-        result = importer.import_with_review(csv_file)
+        result = importer.import_with_review(csv_file, auto_create_drugs=auto_create)
     else:
-        result = importer.import_csv(csv_file)
+        result = importer.import_csv(csv_file, auto_create_drugs=auto_create)
     
     if result['success']:
-        click.echo(f"✓ {result['message']}")
+        click.echo(f"\n✓ Import successful!")
+        click.echo(f"  - Movements processed: {result['movements_processed']}")
+        click.echo(f"  - New drugs created: {result['drugs_created']}")
+        click.echo(f"  - Existing drugs matched: {result['drugs_matched']}")
     else:
-        click.echo(f"✗ Error: {result['error']}", err=True)
+        click.echo(f"\n✗ Import failed!")
+        click.echo(f"  - Movements failed: {result['movements_failed']}")
+        if result.get('details'):
+            for detail in result['details']:
+                if not detail.get('success'):
+                    click.echo(f"  - Error: {detail.get('error')}", err=True)
 
 
 @cli.command()
@@ -120,17 +130,24 @@ def process_audio(audio_file: str, db: str, whisper_model: str,
     importer = DataImporter(db_path=db)
     
     if review:
-        result = importer.import_with_review(csv_path)
+        result = importer.import_with_review(csv_path, auto_create_drugs=True)
     else:
-        result = importer.import_csv(csv_path)
+        result = importer.import_csv(csv_path, auto_create_drugs=True)
     
     if result['success']:
-        click.echo(f"✓ {result['message']}")
+        click.echo(f"\n✓ Import successful!")
+        click.echo(f"  - Movements processed: {result['movements_processed']}")
+        click.echo(f"  - New drugs created: {result['drugs_created']}")
+        click.echo(f"  - Existing drugs matched: {result['drugs_matched']}")
         click.echo("\n" + "="*60)
         click.echo("COMPLETE!")
         click.echo("="*60)
     else:
-        click.echo(f"✗ Error: {result['error']}", err=True)
+        click.echo(f"\n✗ Import failed!")
+        click.echo(f"  - Movements failed: {result['movements_failed']}")
+        for detail in result.get('details', []):
+            if not detail.get('success'):
+                click.echo(f"  - Error: {detail.get('error')}", err=True)
 
 
 @cli.command()

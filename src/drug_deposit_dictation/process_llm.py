@@ -9,25 +9,19 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class DrugInfo(BaseModel):
-    """Drug information model."""
+class DrugMovement(BaseModel):
+    """Complete drug movement information model."""
     name: str = Field(description="Drug name")
-    dose: Optional[str] = Field(default=None, description="Dose amount")
-    units: Optional[str] = Field(default=None, description="Units (mg, ml, g, etc.)")
+    dose: Optional[str] = Field(default=None, description="Dose amount (number only)")
+    units: Optional[str] = Field(default=None, description="Units (mg, ml, g, l, etc.)")
     expiration: Optional[str] = Field(default=None, description="Expiration date (YYYY-MM-DD)")
     pieces_per_box: Optional[int] = Field(default=None, description="Pieces per box")
-    type: Optional[str] = Field(default=None, description="Drug type (antibiotic, analgesic, etc.)")
+    type: Optional[str] = Field(default=None, description="Drug type: comprimidos, ampulla, xarope, pomadas, frasca")
     lote: Optional[str] = Field(default=None, description="Lot number")
-
-
-class MovementInfo(BaseModel):
-    """Movement information model."""
-    drug_name: str = Field(description="Name of the drug")
-    drug_dose: Optional[str] = Field(default=None, description="Dose of the drug")
-    drug_lote: Optional[str] = Field(default=None, description="Lot number")
     movement_type: str = Field(description="Type: entry, exit, or inventory")
-    pieces_moved: int = Field(description="Number of pieces")
-    destination_origin: Optional[str] = Field(default=None, description="Destination (for exit) or origin (for entry)")
+    pieces_moved: Optional[int] = Field(default=None, description="Number of pieces moved")
+    boxes_moved: Optional[int] = Field(default=None, description="Number of boxes (for inventory)")
+    destination_origin: Optional[str] = Field(default=None, description="Supplier (entry) or receiver (exit)")
     date_movement: Optional[str] = Field(default=None, description="Date of movement (YYYY-MM-DD)")
     signature: Optional[str] = Field(default=None, description="Person responsible")
 
@@ -52,43 +46,74 @@ class TranscriptionProcessor:
             transcription_text: The transcribed text
         
         Returns:
-            Dictionary with extracted information
+            Dictionary with list of movements
         """
-        system_prompt = """
-You are an assistant that extracts drug inventory information from spoken Portuguese text.
-Your task is to identify:
-1. Drug information: name, dose, units, expiration date, pieces per box, type, lot number
-2. Movement information: movement type (entry/exit/inventory), pieces moved, destination/origin, date, signature
+        system_prompt = """You are an assistant that extracts drug inventory movement information from spoken Portuguese text.
+
+Your task is to identify ALL movements mentioned in the audio. Each movement MUST include:
+- Drug information: name, dose (number), units of the dose (mg/ml/g/l), expiration date, pieces per box, type (comprimidos/ampulla/xarope/pomadas/frasca), lot number
+- Movement type: MUST be "entry", "exit", or "inventory" (entrada/saída/inventário in Portuguese)
+- Pieces moved: number of pieces (for inventory: if boxes and pieces per box are mentioned, multiply them)
+- Destination/origin: supplier name for entry, receiver for exit, empty for inventory
+- Date: movement date if mentioned
+
+IMPORTANT RULES:
+1. The audio should ALWAYS contains a movement type (entry/exit/inventory). If not there, leave blank.
+2. There may be MULTIPLE movements in one audio - extract ALL of them
+3. For inventory: if "X caixas de Y comprimidos" (X boxes of Y pieces), pieces_moved = X * Y
+4. Return a LIST of movements, even if only one movement
 
 Return ONLY valid JSON with this structure:
 {
-  "type": "drug" or "movement",
-  "drug": {
-    "name": "drug name",
-    "dose": "dose amount",
-    "units": "units",
-    "expiration": "YYYY-MM-DD",
-    "pieces_per_box": number,
-    "type": "drug type",
-    "lote": "lot number"
-  },
-  "movement": {
-    "drug_name": "drug name",
-    "drug_dose": "dose",
-    "drug_lote": "lot number",
-    "movement_type": "entry/exit/inventory",
-    "pieces_moved": number,
-    "destination_origin": "destination or origin",
-    "date_movement": "YYYY-MM-DD",
-    "signature": "person name"
-  }
+  "movements": [
+    {
+      "name": "drug name",
+      "dose": "dose number only",
+      "units": "mg/ml/g/l",
+      "expiration": "YYYY-MM-DD",
+      "pieces_per_box": number,
+      "type": "comprimidos/ampulla/xarope/pomadas/frasca",
+      "lote": "lot number",
+      "movement_type": "entry/exit/inventory",
+      "pieces_moved": number,
+      "destination_origin": "supplier or receiver",
+      "date_movement": "YYYY-MM-DD",
+    }
+  ]
 }
 
-Include only the fields that are mentioned in the text. If it's a new drug definition, use "type": "drug". If it's a movement, use "type": "movement"."""
+For example. 
+Transcription:  Aqui temos ácido folico, 3 caixinha por 100, que é de 5 miligrama, incompreido. Eu comprimido com lote de SNT4112, que é caduco a fevereira de 2,027.
+Return:
+{
+  "movements": [
+    {
+      "name": "ácido folico",
+      "dose": "5",
+      "units": "ml", (This must be conveterd to SI units)
+      "expiration": "2027-02-01",
+      "pieces_per_box": 100,
+      "type": "comprimidos",
+      "lote": "SNT4112",
+      "movement_type": "",
+      "pieces_moved": 300, (This is computerd as 3 boxes * 100 pieces_per_box)
+      "destination_origin": "",
+      "date_movement": "",
+    }
+  ]
+}
 
-        user_prompt = f"""Extract drug inventory information from this text:
+
+Include only the fields that are mentioned. Calculate pieces_moved for inventory if boxes and pieces_per_box are given."""
+
+        user_prompt = f"""Extract ALL drug movement information from this Portuguese text:
 
 "{transcription_text}"
+
+Remember:
+- Find the movement type (entrada/saída/inventário)
+- Extract ALL movements if multiple
+- For inventory with boxes: multiply boxes × pieces_per_box
 
 Return only the JSON object, no explanation."""
 
@@ -106,20 +131,32 @@ Return only the JSON object, no explanation."""
             response_text = response['message']['content']
             
             # Try to extract JSON from the response
-            # Sometimes the model adds markdown code blocks
             if "```json" in response_text:
                 response_text = response_text.split("```json")[1].split("```")[0]
             elif "```" in response_text:
                 response_text = response_text.split("```")[1].split("```")[0]
             
             result = json.loads(response_text.strip())
+            
+            # Ensure movements is a list
+            if "movements" not in result:
+                # Try to wrap in movements list if not present
+                result = {"movements": [result] if isinstance(result, dict) else result}
+            
+            # Calculate pieces_moved for inventory if boxes_moved is present
+            for movement in result.get("movements", []):
+                if movement.get("movement_type") == "inventory":
+                    boxes = movement.get("boxes_moved")
+                    pieces_per_box = movement.get("pieces_per_box")
+                    if boxes and pieces_per_box and not movement.get("pieces_moved"):
+                        movement["pieces_moved"] = boxes * pieces_per_box
+            
             return result
             
         except Exception as e:
             print(f"Error processing with LLM: {e}")
-            # Return a basic structure if parsing fails
             return {
-                "type": "unknown",
+                "movements": [],
                 "error": str(e),
                 "raw_text": transcription_text
             }
@@ -167,65 +204,40 @@ Return only the JSON object, no explanation."""
         
         print(f"Processed JSON saved to: {processed_json_path}")
         
-        # Create CSV
+        # Create CSV for movements
         csv_path = output_path / f"{json_filename}_data.csv"
-        
-        data_type = extracted_data.get('type', 'unknown')
-        
-        if data_type == 'drug':
-            self._save_drug_csv(extracted_data.get('drug', {}), csv_path)
-        elif data_type == 'movement':
-            self._save_movement_csv(extracted_data.get('movement', {}), csv_path)
-        else:
-            print(f"Warning: Unknown data type '{data_type}'")
-            # Save a generic CSV with raw data
-            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(['type', 'raw_data'])
-                writer.writerow([data_type, json.dumps(extracted_data)])
+        self._save_movements_csv(extracted_data.get('movements', []), csv_path)
         
         print(f"CSV saved to: {csv_path}")
         return str(csv_path)
     
-    def _save_drug_csv(self, drug_data: Dict[str, Any], csv_path: Path):
-        """Save drug data to CSV."""
+    def _save_movements_csv(self, movements: List[Dict[str, Any]], csv_path: Path):
+        """Save movements data to CSV."""
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow([
-                'type', 'name', 'dose', 'units', 'expiration',
-                'pieces_per_box', 'drug_type', 'lote'
+                'name', 'dose', 'units', 'expiration',
+                'pieces_per_box', 'type', 'lote',
+                'movement_type', 'pieces_moved', 'boxes_moved',
+                'destination_origin', 'date_movement', 'signature'
             ])
-            writer.writerow([
-                'drug',
-                drug_data.get('name', ''),
-                drug_data.get('dose', ''),
-                drug_data.get('units', ''),
-                drug_data.get('expiration', ''),
-                drug_data.get('pieces_per_box', ''),
-                drug_data.get('type', ''),
-                drug_data.get('lote', '')
-            ])
-    
-    def _save_movement_csv(self, movement_data: Dict[str, Any], csv_path: Path):
-        """Save movement data to CSV."""
-        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                'type', 'drug_name', 'drug_dose', 'drug_lote',
-                'movement_type', 'pieces_moved', 'destination_origin',
-                'date_movement', 'signature'
-            ])
-            writer.writerow([
-                'movement',
-                movement_data.get('drug_name', ''),
-                movement_data.get('drug_dose', ''),
-                movement_data.get('drug_lote', ''),
-                movement_data.get('movement_type', ''),
-                movement_data.get('pieces_moved', ''),
-                movement_data.get('destination_origin', ''),
-                movement_data.get('date_movement', ''),
-                movement_data.get('signature', '')
-            ])
+            
+            for movement in movements:
+                writer.writerow([
+                    movement.get('name', ''),
+                    movement.get('dose', ''),
+                    movement.get('units', ''),
+                    movement.get('expiration', ''),
+                    movement.get('pieces_per_box', ''),
+                    movement.get('type', ''),
+                    movement.get('lote', ''),
+                    movement.get('movement_type', ''),
+                    movement.get('pieces_moved', ''),
+                    movement.get('boxes_moved', ''),
+                    movement.get('destination_origin', ''),
+                    movement.get('date_movement', ''),
+                    movement.get('signature', '')
+                ])
     
     def batch_process(
         self,
