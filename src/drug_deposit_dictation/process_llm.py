@@ -50,71 +50,61 @@ class TranscriptionProcessor:
         """
         system_prompt = """You are an assistant that extracts drug inventory movement information from spoken Portuguese text.
 
-Your task is to identify ALL movements mentioned in the audio. Each movement MUST include:
-- Drug information: name, dose (number), units of the dose (mg/ml/g/l), expiration date, pieces per box, type (comprimidos/ampulla/xarope/pomadas/frasca), lot number
-- Movement type: MUST be "entry", "exit", or "inventory" (entrada/saída/inventário in Portuguese)
-- Pieces moved: number of pieces (for inventory: if boxes and pieces per box are mentioned, multiply them)
-- Destination/origin: supplier name for entry, receiver for exit, empty for inventory
-- Date: movement date if mentioned
+Your task is to identify ALL movements mentioned in the audio.
+You must return ONlY a valid JSON with the following structure and information:
 
-IMPORTANT RULES:
-1. The audio should ALWAYS contains a movement type (entry/exit/inventory). If not there, leave blank.
-2. There may be MULTIPLE movements in one audio - extract ALL of them
-3. For inventory: if "X caixas de Y comprimidos" (X boxes of Y pieces), pieces_moved = X * Y
-4. Return a LIST of movements, even if only one movement
-
-Return ONLY valid JSON with this structure:
 {
   "movements": [
     {
-      "name": "drug name",
-      "dose": "dose number only",
-      "units": "mg/ml/g/l",
-      "expiration": "YYYY-MM-DD",
-      "pieces_per_box": number,
-      "type": "comprimidos/ampulla/xarope/pomadas/frasca",
-      "lote": "lot number",
-      "movement_type": "entry/exit/inventory",
-      "pieces_moved": number,
-      "destination_origin": "supplier or receiver",
-      "date_movement": "YYYY-MM-DD",
+      "name": (str) ->  Name of the drug. The name of the drug is only the name without the concentration. Ex. 
+      "dose": (int) -> The dose of the drug in number. For example if 50ml, return 50. 
+      "units": (str) among "g/mg/l/ml or empty", ->  The units of the dose.
+      "expiration": (str) format "YYYY-MM-DD" -> Expiration date in ISO format.
+      "pieces_per_box": (int), 
+      "type": (str) among "comprimidos/ampulla/xarope/pomadas/frasca",
+      "lote": (str) "lot number"-> Number of lot. Put it lowercase and no special characters. 
+      "movement_type": (str) among "entry/exit/inventory"-> The type of movement for the drug. Inventory is a spcial type when the stock is updated.
+      "pieces_moved": (int) -> The number single pieces moved. For example if "5 comprimidos"-> 5. Empty is only entire boxes moved.
+      "boxes_moved": (int), -> The number of entiry boxes moved. For example "3 caixinhas" -> 3.
+      "destination_origin": (str) "supplier or receiver", -> Destination of origin of the drug if mentioned
+      "date_movement": (str) with format "YYYY-MM-DD", -> Date of the movement if mentioned.
     }
   ]
 }
 
+IMPORTANT RULES:
+1. The audio should ALWAYS contains a movement type (entry/exit/inventory). If not there, leave blank.
+2. There may be MULTIPLE movements in one audio - extract ALL of them with a unique json with list of movements.
+3. Return a LIST of movements, even if only one movement
+
 For example. 
 Transcription:  Aqui temos ácido folico, 3 caixinha por 100, que é de 5 miligrama, incompreido. Eu comprimido com lote de SNT4112, que é caduco a fevereira de 2,027.
-Return:
+You need to return:
 {
   "movements": [
     {
       "name": "ácido folico",
       "dose": "5",
-      "units": "ml", (This must be conveterd to SI units)
+      "units": "ml", 
       "expiration": "2027-02-01",
       "pieces_per_box": 100,
       "type": "comprimidos",
       "lote": "SNT4112",
       "movement_type": "",
-      "pieces_moved": 300, (This is computerd as 3 boxes * 100 pieces_per_box)
+      "pieces_moved: "",
+      "boxes_moved": 3,
       "destination_origin": "",
       "date_movement": "",
     }
   ]
 }
-
-
-Include only the fields that are mentioned. Calculate pieces_moved for inventory if boxes and pieces_per_box are given."""
+"""
 
         user_prompt = f"""Extract ALL drug movement information from this Portuguese text:
 
 "{transcription_text}"
 
 Remember:
-- Find the movement type (entrada/saída/inventário)
-- Extract ALL movements if multiple
-- For inventory with boxes: multiply boxes × pieces_per_box
-
 Return only the JSON object, no explanation."""
 
         print(f"Processing with {self.model_name}...")
@@ -238,49 +228,3 @@ Return only the JSON object, no explanation."""
                     movement.get('date_movement', ''),
                     movement.get('signature', '')
                 ])
-    
-    def batch_process(
-        self,
-        json_files: List[str],
-        output_dir: str = "output/processed"
-    ) -> List[str]:
-        """
-        Process multiple JSON transcription files.
-        
-        Args:
-            json_files: List of JSON file paths
-            output_dir: Directory to save output
-        
-        Returns:
-            List of paths to saved CSV files
-        """
-        csv_paths = []
-        
-        for json_file in json_files:
-            try:
-                csv_path = self.process_json_to_csv(json_file, output_dir)
-                csv_paths.append(csv_path)
-            except Exception as e:
-                print(f"Error processing {json_file}: {e}")
-        
-        return csv_paths
-
-
-def process_transcription_file(
-    json_path: str,
-    output_dir: str = "output/processed",
-    model_name: str = "llama3.1"
-) -> str:
-    """
-    Convenience function to process a single transcription file.
-    
-    Args:
-        json_path: Path to transcription JSON file
-        output_dir: Directory to save output
-        model_name: Ollama model name
-    
-    Returns:
-        Path to the saved CSV file
-    """
-    processor = TranscriptionProcessor(model_name)
-    return processor.process_json_to_csv(json_path, output_dir)

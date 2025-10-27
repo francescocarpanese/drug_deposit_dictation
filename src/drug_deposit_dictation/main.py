@@ -22,7 +22,7 @@ def cli():
 @click.argument('audio_file', type=click.Path(exists=True))
 @click.option('--output-dir', '-o', default='output/transcriptions',
               help='Output directory for transcription JSON')
-@click.option('--model', '-m', default='base',
+@click.option('--model', '-m', default='large',
               type=click.Choice(['tiny', 'base', 'small', 'medium', 'large']),
               help='Whisper model size')
 @click.option('--language', '-l', default='pt',
@@ -38,12 +38,42 @@ def transcribe(audio_file: str, output_dir: str, model: str, language: str):
 
 
 @cli.command()
+@click.argument('directory', type=click.Path(exists=True))
+@click.option('--output-dir', '-o', default='output/transcriptions', help='Output directory for transcription JSONs')
+@click.option('--model', '-m', default='large', type=click.Choice(['tiny', 'base', 'small', 'medium', 'large']), help='Whisper model size')
+@click.option('--language', '-l', default='pt', help='Language code')
+def batch_transcribe(directory: str, output_dir: str, model: str, language: str):
+    """Transcribe all audio files in a directory to JSON."""
+    audio_dir = Path(directory)
+    audio_files = []
+    for ext in ['*.mp3', '*.wav', '*.m4a', '*.ogg', '*.flac']:
+        audio_files.extend(audio_dir.glob(ext))
+    if not audio_files:
+        click.echo("No audio files found in directory.")
+        return
+    click.echo(f"Found {len(audio_files)} audio files")
+    transcriber = AudioTranscriber(model_name=model)
+    for i, audio_file in enumerate(audio_files, 1):
+        click.echo(f"\n{'='*60}")
+        click.echo(f"Transcribing {i}/{len(audio_files)}: {audio_file.name}")
+        click.echo('='*60)
+        try:
+            json_path = transcriber.save_transcription(
+                str(audio_file),
+                output_dir=output_dir,
+                language=language
+            )
+            click.echo(f"✓ Saved: {json_path}")
+        except Exception as e:
+            click.echo(f"✗ Error: {e}", err=True)
+
+@cli.command()
 @click.argument('json_file', type=click.Path(exists=True))
 @click.option('--output-dir', '-o', default='output/processed',
               help='Output directory for processed CSV')
 @click.option('--model', '-m', default='llama3.1',
               help='Ollama model name')
-def process(json_file: str, output_dir: str, model: str):
+def process_transcription(json_file: str, output_dir: str, model: str):
     """Process transcription JSON with LLM to extract structured data."""
     click.echo(f"Processing: {json_file}")
     
@@ -233,64 +263,30 @@ def init_db(db: str):
     click.echo("✓ Database initialized successfully!")
 
 
+
 @cli.command()
 @click.argument('directory', type=click.Path(exists=True))
-@click.option('--db', '-d', default='data/drug_inventory.db',
-              help='Database path')
-@click.option('--whisper-model', default='base',
-              type=click.Choice(['tiny', 'base', 'small', 'medium', 'large']),
-              help='Whisper model size')
-@click.option('--llm-model', default='llama3.1',
-              help='Ollama model name')
-@click.option('--language', '-l', default='pt',
-              help='Language code')
-def batch_process(directory: str, db: str, whisper_model: str,
-                  llm_model: str, language: str):
-    """Process all audio files in a directory."""
-    audio_dir = Path(directory)
-    audio_files = []
-    
-    # Find all audio files
-    for ext in ['*.mp3', '*.wav', '*.m4a', '*.ogg', '*.flac']:
-        audio_files.extend(audio_dir.glob(ext))
-    
-    if not audio_files:
-        click.echo("No audio files found in directory.")
+@click.option('--output-dir', '-o', default='output/processed', help='Output directory for processed CSVs')
+@click.option('--model', '-m', default='llama3.1', help='Ollama model name')
+def batch_process_transcription(directory: str, output_dir: str, model: str):
+    """Process all transcription JSON files in a directory with LLM."""
+    json_dir = Path(directory)
+    json_files = list(json_dir.glob('*.json'))
+    if not json_files:
+        click.echo("No JSON files found in directory.")
         return
-    
-    click.echo(f"Found {len(audio_files)} audio files")
-    
-    transcriber = AudioTranscriber(model_name=whisper_model)
-    processor = TranscriptionProcessor(model_name=llm_model)
-    importer = DataImporter(db_path=db)
-    
-    for i, audio_file in enumerate(audio_files, 1):
+    click.echo(f"Found {len(json_files)} JSON files")
+    processor = TranscriptionProcessor(model_name=model)
+    for i, json_file in enumerate(json_files, 1):
         click.echo(f"\n{'='*60}")
-        click.echo(f"Processing {i}/{len(audio_files)}: {audio_file.name}")
+        click.echo(f"Processing {i}/{len(json_files)}: {json_file.name}")
         click.echo('='*60)
-        
         try:
-            # Transcribe
-            json_path = transcriber.save_transcription(
-                str(audio_file),
-                output_dir='output/transcriptions',
-                language=language
-            )
-            
-            # Process
             csv_path = processor.process_json_to_csv(
-                json_path,
-                output_dir='output/processed'
+                str(json_file),
+                output_dir=output_dir
             )
-            
-            # Import
-            result = importer.import_csv(csv_path)
-            
-            if result['success']:
-                click.echo(f"✓ {result['message']}")
-            else:
-                click.echo(f"✗ {result['error']}")
-                
+            click.echo(f"✓ Saved: {csv_path}")
         except Exception as e:
             click.echo(f"✗ Error: {e}", err=True)
 

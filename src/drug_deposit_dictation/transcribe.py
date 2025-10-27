@@ -121,25 +121,3 @@ class AudioTranscriber:
                 print(f"Error transcribing {audio_file}: {e}")
         
         return json_paths
-
-
-def transcribe_audio_file(
-    audio_path: str,
-    output_dir: str = "output/transcriptions",
-    model_name: str = "base",
-    language: str = "pt"
-) -> str:
-    """
-    Convenience function to transcribe a single audio file.
-    
-    Args:
-        audio_path: Path to the audio file
-        output_dir: Directory to save transcription
-        model_name: Whisper model size
-        language: Language code
-    
-    Returns:
-        Path to the saved JSON file
-    """
-    transcriber = AudioTranscriber(model_name)
-    return transcriber.save_transcription(audio_path, output_dir, language)
